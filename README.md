@@ -13,6 +13,8 @@ A Streamlit app for running the Abernethy Road Chess Tournament. It uses the sam
 - Automatically advances winners into later rounds
 - Shows a round-by-round summary and highlights the tournament champion
 - Includes 10-minute clock rules and app usage instructions
+- Notes that the chess board and two-player timer are provided
+- Lists Pierre Pouchol (`pierre.pouchol@fortescue.com`) as tournament organiser
 
 Match results are stored in Supabase when it is configured. If Supabase is unavailable, the app falls back to a local `matches_data.json` file.
 
