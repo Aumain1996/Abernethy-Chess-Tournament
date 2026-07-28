@@ -499,15 +499,12 @@ elif page == "📝 Results Entry":
                 else 0,
                 key=f"method_{key}",
             )
-            notes = st.text_area("Notes", value=existing.get("notes", ""), key=f"notes_{key}")
-
             if st.button(f"Save Match {match_idx + 1}", key=f"save_{key}"):
                 matches[key] = {
                     "winner": selected_winner,
                     "loser": player_b if selected_winner == player_a else player_a,
                     "date": match_date.isoformat(),
                     "method": result_method,
-                    "notes": notes,
                     "updated_at": datetime.now().isoformat(timespec="seconds"),
                 }
                 save_matches(matches, changed_key=key)
