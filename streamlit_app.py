@@ -428,16 +428,6 @@ elif page == "🎯 Draw":
     st.markdown(
         "Pairings are seeded from signup responses so similar availability/enthusiasm responses are grouped where possible."
     )
-    with st.expander("Signup response groups", expanded=False):
-        signup_rows = [
-            {
-                "Player": p["name"],
-                "Response": p.get("response", ""),
-                "Pairing group": display_response_group(normalise_response(p.get("response", ""))),
-            }
-            for p in players
-        ]
-        st.dataframe(pd.DataFrame(signup_rows), width="stretch", hide_index=True)
 
     st.html(build_bracket_html(rounds_data, num_rounds))
 
