@@ -21,6 +21,8 @@ st.set_page_config(
 TOURNAMENT_NAME = "Abernethy Road Chess Tournament"
 SEASON = "2026"
 RANDOM_SEED = 2026
+ORGANISER_NAME = "Pierre Pouchol"
+ORGANISER_EMAIL = "pierre.pouchol@fortescue.com"
 MATCHES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "matches_data.json")
 PLAYERS_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chess_players.csv")
 
@@ -397,7 +399,13 @@ if page == "📋 Rules of the Tournament":
 
         - Pairings are self-managed. Contact your designated opponent and organise a time that works for both of you.
         - Please complete your match promptly so later rounds are not blocked.
-        - Bring or agree on a chess clock, chess-clock app, or online board that clearly tracks 10 minutes per player.
+        - The chess board and two-player timer will be provided for tournament matches.
+        - Use the provided timer so both players clearly track their own 10-minute limit.
+
+        ### Organiser
+
+        - Tournament organiser: **Pierre Pouchol**.
+        - Questions, timing issues, disputed results, or rule queries should go to [pierre.pouchol@fortescue.com](mailto:pierre.pouchol@fortescue.com).
 
         ### App Instructions
 
@@ -525,3 +533,4 @@ st.sidebar.markdown("---")
 st.sidebar.markdown(f"**{TOURNAMENT_NAME}**")
 st.sidebar.markdown(f"👥 {len(players)} Players Registered")
 st.sidebar.markdown(f"🗓️ Season {SEASON}")
+st.sidebar.markdown(f"Organiser: [{ORGANISER_NAME}](mailto:{ORGANISER_EMAIL})")
