@@ -1,189 +1,168 @@
-import streamlit as st
-import pandas as pd
-import math
-import random
+import csv
 import json
+import math
 import os
-import base64
-from datetime import datetime, time
+import random
+import re
+from datetime import datetime
+
+import pandas as pd
+import streamlit as st
 from supabase import create_client
 
-# ─── App Configuration ───────────────────────────────────────────────────────
+
 st.set_page_config(
     page_title="Abernethy Road Chess Tournament",
     page_icon="♟️",
     layout="wide",
 )
 
-# ─── Player Data (placeholder list inherited from the table tennis app) ───
-PLAYERS = [
-    "Trish Mason",
-    "Austin Main",
-    "Mervin Say",
-    "Helen Maurice-jones",
-    "Belinda Rogers",
-    "Nathan Letizia",
-    "Mehraab Patalwala",
-    "Sardar Ali",
-    "David Chadinha",
-    "Lee Oldham",
-    "Campbell Burt",
-    "Stephen Pope",
-    "Tom Howard",
-    "Jeronimo Mottin",
-    "Aliakbar Boroujerdi",
-    "Joshua Perin",
-    "Kunal Rao",
-    "Joshua Lister",
-    "Tim Arthur",
-    "Karl Ferris",
-    "Dylan Gill",
-    "Finlie Orton",
-    "Dorothee Dangin",
-    "Rowan Florence",
-    "Miles Page",
-    "Stache Jarosz",
-    "Aaron Mitchell",
-    "Tabish Ahmad",
-    "Rene Van der werf",
-    "Fan Zhang",
-    "Zhou Yunfei",
-    "Colin Kang",
-    "Andrew Bostock",
-    "James Gardner",
-    "Matt Ghiji",
-    "Manu Nair",
-    "Bienvenido Veloso",
-    "Harry Flanagan-dorbin",
-    "Jeffrey Ofiana",
-    "Peter Baskovich",
-    "Elodie Rousset",
-    "Abdellah Shafieian dastjerdi",
-    "Heer Gudka",
-    "Rhys Lenegan",
-    "Deepak Maru",
-    "Giuseppe Casillo",
-    "Amit Jaiswal",
-    "Susanne Hantos",
-    "Tijana La bianca",
-    "Beatriz Padilla quintero",
-    "Stephan Burger",
-    "Brady Sloane",
-    "Jaxon Damiani",
-    "Johan van Dyk",
-    "Nick Notis",
-    "James McEwan",
+
+TOURNAMENT_NAME = "Abernethy Road Chess Tournament"
+SEASON = "2026"
+RANDOM_SEED = 2026
+MATCHES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "matches_data.json")
+PLAYERS_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chess_players.csv")
+
+# Fallback only. Replace by adding chess_players.csv with name/response columns.
+FALLBACK_PLAYERS = [
+    {"name": "Player 1", "response": "yes keen"},
+    {"name": "Player 2", "response": "yes keen"},
+    {"name": "Player 3", "response": "maybe, depending on time"},
+    {"name": "Player 4", "response": "maybe, depending on time"},
 ]
 
 
-# ─── Helper Functions ────────────────────────────────────────────────────────
+def normalise_response(response: str) -> str:
+    text = (response or "").strip().lower()
+    words = set(re.findall(r"[a-z]+", text))
+    if "yes" in words or "keen" in words or "definitely" in words or "count me" in text:
+        return "keen"
+    if "maybe" in words or "depending" in words or "depends" in words or "timing" in words or "unsure" in words or "possibly" in words:
+        return "maybe"
+    if "beginner" in words or "casual" in words or "interested" in words:
+        return "casual"
+    if "no" in words or "cannot" in words or "unavailable" in words or "can't" in text:
+        return "unavailable"
+    return "unspecified"
+
+
+def display_response_group(group: str) -> str:
+    return {
+        "keen": "Keen",
+        "maybe": "Maybe / time dependent",
+        "casual": "Beginner / casual",
+        "unavailable": "Unavailable",
+        "unspecified": "Unspecified",
+    }.get(group, "Unspecified")
+
+
 def load_players():
-    """Return the embedded player list."""
-    return PLAYERS.copy()
+    """Load chess players from chess_players.csv when present."""
+    if not os.path.exists(PLAYERS_CSV_PATH):
+        return FALLBACK_PLAYERS
+
+    with open(PLAYERS_CSV_PATH, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+
+    if not rows:
+        return FALLBACK_PLAYERS
+
+    columns = {c.lower().strip(): c for c in rows[0].keys()}
+    name_col = next(
+        (columns[c] for c in columns if c in {"name", "player", "full name", "participant"}),
+        next(iter(rows[0].keys())),
+    )
+    response_col = next(
+        (columns[c] for c in columns if c in {"response", "answer", "availability", "interest", "comment"}),
+        None,
+    )
+
+    players = []
+    for row in rows:
+        name = (row.get(name_col) or "").strip()
+        if not name:
+            continue
+        players.append({"name": name, "response": (row.get(response_col) or "").strip() if response_col else ""})
+
+    return players or FALLBACK_PLAYERS
 
 
 def get_next_power_of_2(n):
-    """Return the next power of 2 >= n."""
-    return 2 ** math.ceil(math.log2(n))
+    return 2 ** math.ceil(math.log2(max(n, 2)))
+
+
+def pair_players_by_response(players):
+    """Pair players with similar signup responses before building the bracket."""
+    rng = random.Random(RANDOM_SEED)
+    grouped = {"keen": [], "maybe": [], "casual": [], "unspecified": [], "unavailable": []}
+
+    for player in players:
+        enriched = {**player, "group": normalise_response(player.get("response", ""))}
+        grouped.setdefault(enriched["group"], []).append(enriched)
+
+    for group_players in grouped.values():
+        rng.shuffle(group_players)
+
+    ordered = []
+    leftovers = []
+    for group in ["keen", "maybe", "casual", "unspecified", "unavailable"]:
+        group_players = grouped.get(group, [])
+        while len(group_players) >= 2:
+            ordered.extend([group_players.pop(0), group_players.pop(0)])
+        if group_players:
+            leftovers.append(group_players.pop(0))
+
+    ordered.extend(leftovers)
+
+    return ordered
 
 
 def generate_bracket(players):
-    """Generate a randomised knockout bracket with byes evenly distributed across both halves."""
-    n = len(players)
-    bracket_size = get_next_power_of_2(n)
-    num_byes = bracket_size - n
-    num_rounds = int(math.log2(bracket_size))
+    ordered_players = pair_players_by_response(players)
+    bracket_size = get_next_power_of_2(len(ordered_players))
+    num_byes = bracket_size - len(ordered_players)
+    paired_players = ordered_players[: len(ordered_players) - num_byes]
+    bye_players = ordered_players[len(ordered_players) - num_byes :]
 
-    # Shuffle players with a fixed seed so the draw is random but consistent
-    random.seed(42)
-    shuffled = players.copy()
-    random.shuffle(shuffled)
+    bracket = [p["name"] for p in paired_players]
+    for player in bye_players:
+        bracket.extend([player["name"], "BYE"])
 
-    # Split byes evenly across both halves of the draw
-    byes_per_half = num_byes // 2
-    byes_left_over = num_byes % 2  # handle odd number of byes
-
-    # Number of matches per half in round 1
-    matches_per_half = bracket_size // 4  # e.g. 64/4 = 16 matches per half
-
-    # Players who get a bye (first in the shuffled list)
-    bye_players_left = shuffled[:byes_per_half]
-    bye_players_right = shuffled[byes_per_half:byes_per_half * 2 + byes_left_over]
-    # Remaining players play actual matches
-    match_players = shuffled[num_byes:]
-
-    # Split match players evenly across left and right halves
-    players_per_half = len(match_players) // 2
-    match_players_left = match_players[:players_per_half]
-    match_players_right = match_players[players_per_half:]
-
-    # Build the bracket array:
-    # Each half: BYE matches FIRST (at the top), then real matches
-    bracket = []
-
-    # --- Left half (first 32 positions) ---
-    # Bye matches first: player vs BYE
-    for p in bye_players_left:
-        bracket.append(p)
-        bracket.append("BYE")
-    # Real matches: player vs player (pairs)
-    for i in range(0, len(match_players_left), 2):
-        bracket.append(match_players_left[i])
-        bracket.append(match_players_left[i + 1])
-
-    # --- Right half (last 32 positions) ---
-    # Bye matches first: player vs BYE
-    for p in bye_players_right:
-        bracket.append(p)
-        bracket.append("BYE")
-    # Real matches: player vs player (pairs)
-    for i in range(0, len(match_players_right), 2):
-        bracket.append(match_players_right[i])
-        bracket.append(match_players_right[i + 1])
-
-    return bracket, bracket_size, num_rounds
-
-
-MATCHES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "matches_data.json")
+    return bracket, bracket_size, int(math.log2(bracket_size))
 
 
 @st.cache_resource
 def get_supabase_client():
-    """Get a cached Supabase client. Returns None if secrets are not configured."""
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
         client = create_client(url, key)
-        # Verify connection with a lightweight ping
         client.table("matches").select("match_key").limit(1).execute()
         return client
-    except KeyError:
-        return None  # Secrets not configured
     except Exception:
-        return None  # Connection failed
+        return None
 
 
 def load_matches() -> dict:
-    """Load all match data from Supabase. Falls back to local JSON file if not configured."""
     client = get_supabase_client()
     if client:
         try:
             response = client.table("matches").select("match_key, data").execute()
             return {row["match_key"]: row["data"] for row in response.data}
         except Exception as e:
-            st.error(f"❌ Supabase load failed: {e}")
-    # Fallback: local JSON file
+            st.error(f"Supabase load failed: {e}")
+
     if os.path.exists(MATCHES_PATH):
         try:
-            with open(MATCHES_PATH, "r") as f:
+            with open(MATCHES_PATH, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError):
+        except (json.JSONDecodeError, OSError):
             return {}
     return {}
 
 
 def save_matches(matches: dict, changed_key: str = None):
-    """Upsert the changed match row to Supabase. Falls back to local JSON if not configured."""
     client = get_supabase_client()
     if client:
         try:
@@ -195,699 +174,354 @@ def save_matches(matches: dict, changed_key: str = None):
                 rows = [{"match_key": k, "data": v} for k, v in matches.items()]
                 if rows:
                     client.table("matches").upsert(rows).execute()
-            return  # ✅ saved to Supabase — do NOT fall through to file
+            return
         except Exception as e:
-            st.error(f"❌ Supabase save failed: {e}")
-    # Fallback: local JSON file (only reached if Supabase is unavailable)
+            st.error(f"Supabase save failed: {e}")
+
     try:
-        with open(MATCHES_PATH, "w") as f:
+        with open(MATCHES_PATH, "w", encoding="utf-8") as f:
             json.dump(matches, f, indent=2)
-        st.warning("⚠️ Saved to local file only — Supabase is not connected.")
-    except IOError as e:
-        st.error(f"❌ Local file save also failed: {e}")
+        st.warning("Saved to local file only because Supabase is not connected.")
+    except OSError as e:
+        st.error(f"Local file save also failed: {e}")
 
 
-def get_match_key(round_num, match_num):
-    """Generate a unique key for a match."""
+def round_name(round_num, num_rounds):
+    remaining = num_rounds - round_num
+    if remaining == 1:
+        return "Grand Final"
+    if remaining == 2:
+        return "Semi Finals"
+    if remaining == 3:
+        return "Quarter Finals"
+    if remaining == 4:
+        return "Round of 16"
+    return f"Round {round_num + 1}"
+
+
+def match_key(round_num, match_num):
     return f"R{round_num}_M{match_num}"
 
 
-def get_round_name(round_num, total_rounds):
-    """Get a human-readable name for a round."""
-    rounds_remaining = total_rounds - round_num - 1  # 0 = this is the final round
-    if rounds_remaining == 0:
-        return "🏆 Grand Final"
-    elif rounds_remaining == 1:
-        return "Semi Finals"
-    elif rounds_remaining == 2:
-        return "Quarter Finals"
-    elif rounds_remaining == 3:
-        return "Round of 16"
-    else:
-        return f"Round {round_num + 1}"
-
-
-def determine_set_winner(score_a, score_b):
-    """Determine if a set has a valid winner (first to 11, win by 2 at 10-10)."""
-    if score_a is None or score_b is None:
-        return None
-    if score_a >= 11 and score_a - score_b >= 2:
-        return "A"
-    if score_b >= 11 and score_b - score_a >= 2:
-        return "B"
-    if score_a >= 10 and score_b >= 10:
-        if abs(score_a - score_b) >= 2:
-            return "A" if score_a > score_b else "B"
-    return None
-
-
-def determine_match_winner(sets_data, forfeit=None):
-    """Determine the match winner based on best of 3 sets, or forfeit."""
-    if forfeit == "A":
-        return "B"  # Player A forfeited → Player B wins
-    if forfeit == "B":
-        return "A"  # Player B forfeited → Player A wins
-    wins_a = 0
-    wins_b = 0
-    for s in sets_data:
-        winner = determine_set_winner(s.get("score_a"), s.get("score_b"))
-        if winner == "A":
-            wins_a += 1
-        elif winner == "B":
-            wins_b += 1
-    if wins_a >= 2:
-        return "A"
-    elif wins_b >= 2:
-        return "B"
-    return None
-
-
 def get_match_participants(round_num, match_num, bracket, matches, num_rounds):
-    """Recursively determine who plays in a given match."""
     if round_num == 0:
-        # First round - read directly from bracket
-        idx_a = match_num * 2
-        idx_b = match_num * 2 + 1
-        player_a = bracket[idx_a] if idx_a < len(bracket) else "BYE"
-        player_b = bracket[idx_b] if idx_b < len(bracket) else "BYE"
-        return player_a, player_b
-    else:
-        # Later rounds - get winners from previous round
-        prev_match_a = match_num * 2
-        prev_match_b = match_num * 2 + 1
+        return bracket[match_num * 2], bracket[match_num * 2 + 1]
 
-        player_a = get_winner(round_num - 1, prev_match_a, bracket, matches, num_rounds)
-        player_b = get_winner(round_num - 1, prev_match_b, bracket, matches, num_rounds)
-
-        return player_a, player_b
+    prev_match_a = match_num * 2
+    prev_match_b = match_num * 2 + 1
+    return (
+        get_winner(round_num - 1, prev_match_a, bracket, matches, num_rounds),
+        get_winner(round_num - 1, prev_match_b, bracket, matches, num_rounds),
+    )
 
 
 def get_winner(round_num, match_num, bracket, matches, num_rounds):
-    """Get the winner of a specific match."""
     player_a, player_b = get_match_participants(round_num, match_num, bracket, matches, num_rounds)
-
-    # Handle byes
     if player_a == "BYE":
         return player_b
     if player_b == "BYE":
         return player_a
+    if not player_a or not player_b:
+        return None
 
-    # Check if match has been played
-    match_key = get_match_key(round_num, match_num)
-    if match_key in matches:
-        match_data = matches[match_key]
-        sets_data = match_data.get("sets", [])
-        forfeit = match_data.get("forfeit")  # "A" or "B" or None
-        winner = determine_match_winner(sets_data, forfeit=forfeit)
-        if winner == "A":
-            return player_a
-        elif winner == "B":
-            return player_b
-
-    return None
+    data = matches.get(match_key(round_num, match_num), {})
+    winner = data.get("winner")
+    return winner if winner in {player_a, player_b} else None
 
 
-def calculate_ladder(bracket, matches, num_rounds):
-    """Calculate the ladder with percentage points for each player."""
-    players = [p for p in bracket if p != "BYE"]
-    stats = {p: {"played": 0, "sets_won": 0, "sets_lost": 0,
-                 "points_won": 0, "points_lost": 0, "matches_won": 0,
-                 "matches_lost": 0} for p in players}
-
-    for match_key, match_data in matches.items():
-        parts = match_key.split("_")
-        round_num = int(parts[0][1:])
-        match_num = int(parts[1][1:])
-
-        player_a, player_b = get_match_participants(round_num, match_num, bracket, matches, num_rounds)
-
-        if player_a == "BYE" or player_b == "BYE" or player_a is None or player_b is None:
-            continue
-
-        sets_data = match_data.get("sets", [])
-        match_winner = determine_match_winner(sets_data)
-
-        if match_winner is None:
-            continue
-
-        stats[player_a]["played"] += 1
-        stats[player_b]["played"] += 1
-
-        if match_winner == "A":
-            stats[player_a]["matches_won"] += 1
-            stats[player_b]["matches_lost"] += 1
-        else:
-            stats[player_b]["matches_won"] += 1
-            stats[player_a]["matches_lost"] += 1
-
-        for s in sets_data:
-            sa = s.get("score_a", 0) or 0
-            sb = s.get("score_b", 0) or 0
-            stats[player_a]["points_won"] += sa
-            stats[player_a]["points_lost"] += sb
-            stats[player_b]["points_won"] += sb
-            stats[player_b]["points_lost"] += sa
-
-            set_winner = determine_set_winner(sa, sb)
-            if set_winner == "A":
-                stats[player_a]["sets_won"] += 1
-                stats[player_b]["sets_lost"] += 1
-            elif set_winner == "B":
-                stats[player_b]["sets_won"] += 1
-                stats[player_a]["sets_lost"] += 1
-
-    return stats
+def match_status(round_num, match_num, bracket, matches, num_rounds):
+    player_a, player_b = get_match_participants(round_num, match_num, bracket, matches, num_rounds)
+    if player_a == "BYE" or player_b == "BYE":
+        return "Bye"
+    if not player_a or not player_b:
+        return "Waiting"
+    if get_winner(round_num, match_num, bracket, matches, num_rounds):
+        return "Complete"
+    return "Pending"
 
 
-# ─── Load Data ───────────────────────────────────────────────────────────────
+def build_rounds_data(bracket, matches, num_rounds):
+    rounds = []
+    bracket_size = len(bracket)
+    for r in range(num_rounds):
+        round_matches = []
+        for m in range(bracket_size // (2 ** (r + 1))):
+            player_a, player_b = get_match_participants(r, m, bracket, matches, num_rounds)
+            round_matches.append(
+                {
+                    "player_a": player_a,
+                    "player_b": player_b,
+                    "winner": get_winner(r, m, bracket, matches, num_rounds),
+                    "status": match_status(r, m, bracket, matches, num_rounds),
+                }
+            )
+        rounds.append(round_matches)
+    return rounds
+
+
+def css_class_for_match(match):
+    if match["status"] == "Complete":
+        return "complete"
+    if match["status"] == "Bye":
+        return "bye"
+    if match["status"] == "Waiting":
+        return "waiting"
+    return "pending"
+
+
+def build_bracket_html(rounds_data, num_rounds):
+    def player_line(name, winner):
+        label = name or "TBD"
+        safe = str(label).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        cls = "player winner" if winner and label == winner else "player"
+        return f'<div class="{cls}">{safe}</div>'
+
+    round_columns = []
+    for r, round_matches in enumerate(rounds_data):
+        cards = []
+        for idx, match in enumerate(round_matches, start=1):
+            cls = css_class_for_match(match)
+            cards.append(
+                f"""
+                <div class="match-card {cls}">
+                    <div class="match-meta">Match {idx} · {match["status"]}</div>
+                    {player_line(match["player_a"], match["winner"])}
+                    {player_line(match["player_b"], match["winner"])}
+                </div>
+                """
+            )
+        round_columns.append(
+            f"""
+            <section class="round-column">
+                <h3>{round_name(r, num_rounds)}</h3>
+                <div class="matches">{''.join(cards)}</div>
+            </section>
+            """
+        )
+
+    return f"""
+    <style>
+        .bracket-wrap {{
+            overflow-x: auto;
+            padding: 8px 0 24px;
+        }}
+        .bracket {{
+            display: grid;
+            grid-template-columns: repeat({num_rounds}, minmax(210px, 1fr));
+            gap: 18px;
+            min-width: {max(860, num_rounds * 230)}px;
+        }}
+        .round-column h3 {{
+            margin: 0 0 12px;
+            color: #f8fafc;
+            font-size: 16px;
+            font-weight: 700;
+        }}
+        .matches {{
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }}
+        .match-card {{
+            border: 1px solid rgba(148, 163, 184, 0.34);
+            border-left: 4px solid #64748b;
+            border-radius: 8px;
+            background: #111827;
+            padding: 10px;
+            min-height: 98px;
+            box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+        }}
+        .match-card.complete {{ border-left-color: #22c55e; }}
+        .match-card.pending {{ border-left-color: #38bdf8; }}
+        .match-card.waiting {{ opacity: 0.72; }}
+        .match-card.bye {{ border-left-color: #f59e0b; }}
+        .match-meta {{
+            color: #94a3b8;
+            font-size: 12px;
+            margin-bottom: 8px;
+        }}
+        .player {{
+            background: #1f2937;
+            border-radius: 6px;
+            color: #e5e7eb;
+            font-size: 14px;
+            line-height: 1.25;
+            margin-top: 6px;
+            min-height: 30px;
+            padding: 7px 8px;
+            overflow-wrap: anywhere;
+        }}
+        .player.winner {{
+            background: #064e3b;
+            color: #dcfce7;
+            font-weight: 700;
+        }}
+    </style>
+    <div class="bracket-wrap"><div class="bracket">{''.join(round_columns)}</div></div>
+    """
+
+
 players = load_players()
 bracket, bracket_size, num_rounds = generate_bracket(players)
 matches = load_matches()
+rounds_data = build_rounds_data(bracket, matches, num_rounds)
 
-# ─── Sidebar Navigation ──────────────────────────────────────────────────────
 st.sidebar.title("♟️ Navigation")
 page = st.sidebar.radio(
     "Go to:",
-    ["🎯 Draw", "📝 Results Entry", "📊 Ladder", "📋 Rules of the Tournament"]
+    ["📋 Rules of the Tournament", "🎯 Draw", "📝 Results Entry"],
 )
 
-st.title("♟️ Abernethy Road Chess Tournament")
+st.title(f"♟️ {TOURNAMENT_NAME}")
 st.markdown("---")
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE 1: GRAPHICAL DRAW
-# ═══════════════════════════════════════════════════════════════════════════════
-if page == "🎯 Draw":
+
+if page == "📋 Rules of the Tournament":
+    st.header("📋 Rules of the Tournament")
+    st.markdown(
+        """
+        Welcome to the Abernethy Road Chess Tournament. This is a self-managed workplace
+        knockout competition using a simple **10 minutes per player, no increment** format.
+
+        ### Match Format
+
+        - Each match is one game of chess.
+        - Each player has **10 cumulative minutes** for all of their own moves.
+        - Start your clock when it is your turn. Stop it after you make your move.
+        - If your own clock reaches **0:00**, you lose on time.
+        - A checkmate wins immediately, even if time remains on both clocks.
+        - Stalemate, agreed draw, threefold repetition, or insufficient mating material should be replayed unless both players agree another practical resolution before starting.
+        - If a player makes an illegal move, pause the clock, restore the legal position, and continue. Repeated illegal moves can be referred to the organiser.
+
+        ### Scheduling
+
+        - Pairings are self-managed. Contact your designated opponent and organise a time that works for both of you.
+        - Please complete your match promptly so later rounds are not blocked.
+        - Bring or agree on a chess clock, chess-clock app, or online board that clearly tracks 10 minutes per player.
+
+        ### App Instructions
+
+        - Use **Draw** to see your opponent and the live knockout bracket.
+        - Use **Results Entry** after your match to record the winner.
+        - Only enter a result once both players agree the game is complete.
+        - Winners automatically flow into the next round of the draw.
+
+        ### Useful Rule References
+
+        - [FIDE Laws of Chess](https://handbook.fide.com/chapter/e012023) for formal chess and clock rules.
+        - [US Chess quick/speed chess overview](https://new.uschess.org/speed-and-quick-chess-everybody) for time-control context.
+
+        This app keeps the tournament lightweight: one game, one winner, and no ladder.
+        """
+    )
+
+elif page == "🎯 Draw":
     st.header("🎯 Tournament Draw")
-    st.markdown("Visual knockout bracket — left side and right side converge to the **Grand Final** in the centre.")
-
-    # Build bracket data for each round
-    def get_bracket_display_data():
-        """Build display names for every slot in the bracket."""
-        rounds_data = []
-        for r in range(num_rounds):
-            num_matches = bracket_size // (2 ** (r + 1))
-            round_matches = []
-            for m in range(num_matches):
-                pa, pb = get_match_participants(r, m, bracket, matches, num_rounds)
-                w = get_winner(r, m, bracket, matches, num_rounds)
-                round_matches.append({"player_a": pa, "player_b": pb, "winner": w})
-            rounds_data.append(round_matches)
-        return rounds_data
-
-    rounds_data = get_bracket_display_data()
-
-    # Split bracket into two halves (top half = left side, bottom half = right side)
-    half = bracket_size // 2  # 32 players per side
-
-    def get_display_name(name):
-        if name is None:
-            return "TBD"
-        if name == "BYE":
-            return "BYE"
-        # Truncate long names
-        return name if len(name) <= 22 else name[:20] + "…"
-
-    def build_bracket_html():
-        """Generate HTML/CSS for a graphical bracket view."""
-
-        # Load and base64-encode the trophy image for embedding in HTML
-        trophy_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Table Tennis Trophy.jpg")
-        trophy_img_tag = ""
-        if os.path.exists(trophy_path):
-            with open(trophy_path, "rb") as f:
-                trophy_b64 = base64.b64encode(f.read()).decode()
-            trophy_img_tag = (
-                f'<img src="data:image/jpeg;base64,{trophy_b64}" '
-                f'style="width:120px;height:auto;display:block;margin:0 auto 10px auto;'
-                f'border-radius:8px;opacity:0.95;" alt="Trophy"/>'
-            )        # Determine rounds per side (all rounds except final)
-        rounds_per_side = num_rounds - 1  # e.g. 5 rounds per side, then 1 final
-
-        # Split matches into left and right halves
-        left_rounds = []
-        right_rounds = []
-        for r in range(rounds_per_side):
-            num_matches = len(rounds_data[r])
-            half_count = num_matches // 2
-            left_rounds.append(rounds_data[r][:half_count])
-            right_rounds.append(rounds_data[r][half_count:])
-
-        # Final match
-        final_match = rounds_data[num_rounds - 1][0] if rounds_data[num_rounds - 1] else None
-
-        # CSS styles
-        css = """
-        <style>
-            .bracket-container {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 0;
-                font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 11px;
-                overflow-x: auto;
-                padding: 20px 0;
+    st.markdown(
+        "Pairings are seeded from signup responses so similar availability/enthusiasm responses are grouped where possible."
+    )
+    with st.expander("Signup response groups", expanded=False):
+        signup_rows = [
+            {
+                "Player": p["name"],
+                "Response": p.get("response", ""),
+                "Pairing group": display_response_group(normalise_response(p.get("response", ""))),
             }
-            .bracket-side {
-                display: flex;
-                align-items: center;
-            }
-            .bracket-round {
-                display: flex;
-                flex-direction: column;
-                justify-content: center;
-                margin: 0 2px;
-            }
-            .bracket-match {
-                display: flex;
-                flex-direction: column;
-                margin: 4px 0;
-                border: 1px solid #444;
-                border-radius: 4px;
-                overflow: hidden;
-                min-width: 140px;
-                background: #1e1e1e;
-            }
-            .bracket-player {
-                padding: 4px 8px;
-                border-bottom: 1px solid #333;
-                white-space: nowrap;
-                color: #ddd;
-            }
-            .bracket-player:last-child {
-                border-bottom: none;
-            }
-            .bracket-player.winner {
-                background: #1a5c2a;
-                font-weight: bold;
-                color: #4cff72;
-            }
-            .bracket-player.bye {
-                color: #666;
-                font-style: italic;
-            }
-            .bracket-player.tbd {
-                color: #888;
-                font-style: italic;
-            }
-            .final-container {
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                margin: 0 15px;
-                min-width: 170px;
-            }
-            .final-label {
-                font-size: 14px;
-                font-weight: bold;
-                color: #ffd700;
-                margin-bottom: 8px;
-                text-align: center;
-            }
-            .final-match {
-                border: 2px solid #ffd700;
-                border-radius: 6px;
-                overflow: hidden;
-                min-width: 170px;
-                background: #2a2a1a;
-            }
-            .final-match .bracket-player {
-                padding: 6px 10px;
-                font-size: 12px;
-            }
-            .final-match .bracket-player.winner {
-                background: #3d6b1e;
-                color: #7dff3a;
-            }
-            .champion-label {
-                margin-top: 10px;
-                font-size: 13px;
-                color: #ffd700;
-                font-weight: bold;
-                text-align: center;
-            }
-            .round-label {
-                text-align: center;
-                font-size: 10px;
-                color: #999;
-                margin-bottom: 6px;
-                font-weight: bold;
-                text-transform: uppercase;
-            }
-        </style>
-        """
+            for p in players
+        ]
+        st.dataframe(pd.DataFrame(signup_rows), width="stretch", hide_index=True)
 
-        def render_match(match_data):
-            pa = get_display_name(match_data["player_a"])
-            pb = get_display_name(match_data["player_b"])
-            w = match_data["winner"]
+    st.html(build_bracket_html(rounds_data, num_rounds))
 
-            class_a = ""
-            class_b = ""
-            if pa == "BYE":
-                class_a = " bye"
-            elif pa == "TBD":
-                class_a = " tbd"
-            if pb == "BYE":
-                class_b = " bye"
-            elif pb == "TBD":
-                class_b = " tbd"
+    st.markdown("### Round-by-Round Summary")
+    for r, round_matches in enumerate(rounds_data):
+        with st.expander(f"{round_name(r, num_rounds)} ({len(round_matches)} matches)", expanded=(r == 0)):
+            rows = []
+            for idx, match in enumerate(round_matches, start=1):
+                rows.append(
+                    {
+                        "Match": idx,
+                        "Player A": match["player_a"] or "TBD",
+                        "Player B": match["player_b"] or "TBD",
+                        "Status": match["status"],
+                        "Winner": match["winner"] or "",
+                    }
+                )
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
-            if w is not None:
-                if w == match_data["player_a"]:
-                    class_a = " winner"
-                elif w == match_data["player_b"]:
-                    class_b = " winner"
-
-            return f'''<div class="bracket-match">
-                <div class="bracket-player{class_a}">{pa}</div>
-                <div class="bracket-player{class_b}">{pb}</div>
-            </div>'''
-
-        def render_round(round_matches):
-            html = '<div class="bracket-round">'
-            for match in round_matches:
-                html += render_match(match)
-            html += '</div>'
-            return html
-
-        # Build left side (rounds go left to right, converging to center)
-        left_html = '<div class="bracket-side">'
-        for r in range(rounds_per_side):
-            left_html += render_round(left_rounds[r])
-        left_html += '</div>'
-
-        # Build right side (rounds go right to left, converging to center)
-        right_html = '<div class="bracket-side">'
-        for r in range(rounds_per_side - 1, -1, -1):
-            right_html += render_round(right_rounds[r])
-        right_html += '</div>'
-
-        # Build final
-        final_html = '<div class="final-container">'
-        final_html += trophy_img_tag
-        final_html += '<div class="final-label">🏆 GRAND FINAL 🏆</div>'
-        if final_match:
-            pa = get_display_name(final_match["player_a"])
-            pb = get_display_name(final_match["player_b"])
-            w = final_match["winner"]
-            class_a = " tbd" if pa == "TBD" else ""
-            class_b = " tbd" if pb == "TBD" else ""
-            if w is not None:
-                if w == final_match["player_a"]:
-                    class_a = " winner"
-                elif w == final_match["player_b"]:
-                    class_b = " winner"
-
-            final_html += f'''<div class="final-match">
-                <div class="bracket-player{class_a}">{pa}</div>
-                <div class="bracket-player{class_b}">{pb}</div>
-            </div>'''
-            if w:
-                final_html += f'<div class="champion-label">🥇 {get_display_name(w)}</div>'
-        final_html += '</div>'
-
-        full_html = f"""
-        {css}
-        <div class="bracket-container">
-            {left_html}
-            {final_html}
-            {right_html}
-        </div>
-        """
-        return full_html
-
-    # Calculate height based on number of first-round matches
-    first_round_matches = bracket_size // 2
-    estimated_height = max(800, (first_round_matches // 2) * 58 + 100)
-
-    bracket_html = build_bracket_html()
-    st.components.v1.html(bracket_html, height=estimated_height, scrolling=True)
-
-    # Also show a simplified text-based bracket for clarity
-    st.markdown("---")
-    st.markdown("### 📋 Round-by-Round Summary")
-    for r in range(num_rounds):
-        round_name = get_round_name(r, num_rounds)
-        with st.expander(f"**{round_name}** ({len(rounds_data[r])} matches)", expanded=False):
-            summary = []
-            for m, md in enumerate(rounds_data[r]):
-                pa = md["player_a"] or "TBD"
-                pb = md["player_b"] or "TBD"
-                w = md["winner"]
-                if pa == "BYE":
-                    summary.append({"#": m+1, "Player A": "—", "Player B": pb, "Result": f"{pb} (BYE)"})
-                elif pb == "BYE":
-                    summary.append({"#": m+1, "Player A": pa, "Player B": "—", "Result": f"{pa} (BYE)"})
-                else:
-                    summary.append({"#": m+1, "Player A": pa, "Player B": pb, "Result": w or "—"})
-            st.dataframe(pd.DataFrame(summary), use_container_width=True, hide_index=True)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE 2: RESULTS ENTRY
-# ═══════════════════════════════════════════════════════════════════════════════
 elif page == "📝 Results Entry":
     st.header("📝 Results Entry")
-    st.markdown(f"**{len(players)} Players** | **{num_rounds} Rounds** | Best of 3 Sets (First to 11)")
+    st.markdown("Record one winner per completed chess match. Winners automatically advance.")
 
-    # Round selector
-    round_names = [get_round_name(r, num_rounds) for r in range(num_rounds)]
-    selected_round = st.selectbox("Select Round", range(num_rounds),
-                                   format_func=lambda x: round_names[x])
+    selected_round = st.selectbox(
+        "Select Round",
+        range(num_rounds),
+        format_func=lambda r: round_name(r, num_rounds),
+    )
 
-    num_matches_in_round = bracket_size // (2 ** (selected_round + 1))
+    round_matches = rounds_data[selected_round]
+    playable_count = 0
 
-    # Count real (non-bye) matches for the header
-    real_matches = [
-        m for m in range(num_matches_in_round)
-        if not any(
-            p == "BYE"
-            for p in get_match_participants(selected_round, m, bracket, matches, num_rounds)
-        )
-    ]
-    st.markdown(f"### {round_names[selected_round]} — {len(real_matches)} Match(es)")
-    st.markdown("---")
+    for match_idx, match in enumerate(round_matches):
+        player_a, player_b = match["player_a"], match["player_b"]
+        key = match_key(selected_round, match_idx)
 
-    match_display_num = 0
-    for match_idx in range(num_matches_in_round):
-        player_a, player_b = get_match_participants(selected_round, match_idx, bracket, matches, num_rounds)
-
-        # Skip BYE matches entirely — they don't need results entered
         if player_a == "BYE" or player_b == "BYE":
             continue
 
-        if player_a is None or player_b is None:
-            st.markdown(f"*Waiting for previous round results*")
-            st.markdown("---")
+        match_label = f"Match {match_idx + 1}: {player_a or 'TBD'} vs {player_b or 'TBD'}"
+        if not player_a or not player_b:
+            with st.expander(match_label, expanded=False):
+                st.info("Waiting for previous round results.")
             continue
 
-        match_display_num += 1
-        match_key = get_match_key(selected_round, match_idx)
-        match_data = matches.get(match_key, {})
+        playable_count += 1
+        existing = matches.get(key, {})
+        winner = existing.get("winner")
+        expanded = winner is None
 
-        winner = get_winner(selected_round, match_idx, bracket, matches, num_rounds)
-        is_forfeit = bool(match_data.get("forfeit"))
-        forfeit_label = f" — 🚫 Forfeit ({match_data.get('forfeit_player', '')})" if is_forfeit else ""
-
-        with st.expander(f"**Match {match_display_num}: {player_a} vs {player_b}**" +
-                         (f" — Winner: {winner} 🏆{forfeit_label}" if winner else ""), expanded=False):
-
+        with st.expander(match_label + (f" — Winner: {winner}" if winner else ""), expanded=expanded):
             match_date = st.date_input(
-                    "Match Date",
-                    value=datetime.strptime(match_data["date"], "%Y-%m-%d").date()
-                    if match_data.get("date") else None,
-                    key=f"date_{match_key}"
-                )
-
-            # ── Forfeit toggle ────────────────────────────────────────────────
-            st.markdown("---")
-            forfeit_checked = st.checkbox(
-                "🚫 Record as Forfeit (opponent did not show up)",
-                value=is_forfeit,
-                key=f"forfeit_check_{match_key}"
+                "Match date",
+                value=datetime.strptime(existing.get("date", datetime.now().date().isoformat()), "%Y-%m-%d").date(),
+                key=f"date_{key}",
             )
-
-            forfeit_player = None
-            if forfeit_checked:
-                forfeiting = st.radio(
-                    "Which player forfeited?",
-                    options=[player_a, player_b],
-                    index=0 if match_data.get("forfeit") != "B" else 1,
-                    key=f"forfeit_who_{match_key}"
+            selected_winner = st.radio(
+                "Winner",
+                [player_a, player_b],
+                index=[player_a, player_b].index(winner) if winner in {player_a, player_b} else 0,
+                key=f"winner_{key}",
+            )
+            result_method = st.selectbox(
+                "Result method",
+                ["Checkmate", "Time forfeit", "Resignation", "Opponent forfeit", "Other"],
+                index=["Checkmate", "Time forfeit", "Resignation", "Opponent forfeit", "Other"].index(
+                    existing.get("method", "Checkmate")
                 )
-                forfeit_player = "A" if forfeiting == player_a else "B"
-                st.warning(f"⚠️ **{forfeiting}** will be recorded as forfeiting. "
-                           f"**{''.join([player_b if forfeiting == player_a else player_a])}** advances.")
+                if existing.get("method", "Checkmate") in ["Checkmate", "Time forfeit", "Resignation", "Opponent forfeit", "Other"]
+                else 0,
+                key=f"method_{key}",
+            )
+            notes = st.text_area("Notes", value=existing.get("notes", ""), key=f"notes_{key}")
 
-            # ── Score entry (hidden when forfeit is selected) ─────────────────
-            new_sets = match_data.get("sets", [{}, {}, {}])
-            while len(new_sets) < 3:
-                new_sets.append({})
-
-            if not forfeit_checked:
-                st.markdown("---")
-                st.markdown(f"**{player_a}** vs **{player_b}**")
-                new_sets = []
-                cols = st.columns(3)
-                sets_data = match_data.get("sets", [{}, {}, {}])
-                while len(sets_data) < 3:
-                    sets_data.append({})
-                for set_idx in range(3):
-                    with cols[set_idx]:
-                        st.markdown(f"**Set {set_idx + 1}**")
-                        sa = st.number_input(
-                            f"{player_a}",
-                            min_value=0, max_value=99,
-                            value=sets_data[set_idx].get("score_a", 0) or 0,
-                            key=f"sa_{match_key}_{set_idx}"
-                        )
-                        sb = st.number_input(
-                            f"{player_b}",
-                            min_value=0, max_value=99,
-                            value=sets_data[set_idx].get("score_b", 0) or 0,
-                            key=f"sb_{match_key}_{set_idx}"
-                        )
-                        new_sets.append({"score_a": sa, "score_b": sb})
-
-                        sw = determine_set_winner(sa, sb)
-                        if sw == "A":
-                            st.success(f"✓ {player_a}")
-                        elif sw == "B":
-                            st.success(f"✓ {player_b}")
-
-            # ── Save button ───────────────────────────────────────────────────
-            st.markdown("---")
-            if st.button(f"💾 Save Match {match_display_num}", key=f"save_{match_key}"):
-                matches[match_key] = {
-                    "player_a": player_a,
-                    "player_b": player_b,
-                    "date": match_date.strftime("%Y-%m-%d") if match_date else None,
-                    "sets": new_sets,
-                    "forfeit": forfeit_player,
-                    "forfeit_player": (player_a if forfeit_player == "A" else player_b) if forfeit_player else None,
+            if st.button(f"Save Match {match_idx + 1}", key=f"save_{key}"):
+                matches[key] = {
+                    "winner": selected_winner,
+                    "loser": player_b if selected_winner == player_a else player_a,
+                    "date": match_date.isoformat(),
+                    "method": result_method,
+                    "notes": notes,
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
                 }
-                save_matches(matches, changed_key=match_key)
-                st.success("✅ Match saved successfully!")
+                save_matches(matches, changed_key=key)
+                st.success("Match saved successfully.")
                 st.rerun()
 
-        st.markdown("---")
+    if playable_count == 0:
+        st.info("No playable matches are available in this round yet.")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE 3: LADDER
-# ═══════════════════════════════════════════════════════════════════════════════
-elif page == "📊 Ladder":
-    st.header("📊 Tournament Ladder")
-    st.markdown("Rankings based on match results. **Percentage** = Points Won / Total Points Played × 100")
-
-    stats = calculate_ladder(bracket, matches, num_rounds)
-
-    ladder_data = []
-    for player, s in stats.items():
-        total_points = s["points_won"] + s["points_lost"]
-        pct = (s["points_won"] / total_points * 100) if total_points > 0 else 0.0
-        ladder_data.append({
-            "Player": player,
-            "Matches Played": s["played"],
-            "Matches Won": s["matches_won"],
-            "Matches Lost": s["matches_lost"],
-            "Sets Won": s["sets_won"],
-            "Sets Lost": s["sets_lost"],
-            "Points Won": s["points_won"],
-            "Points Lost": s["points_lost"],
-            "Percentage (%)": round(pct, 1)
-        })
-
-    df_ladder = pd.DataFrame(ladder_data)
-    df_ladder = df_ladder.sort_values(
-        by=["Matches Won", "Percentage (%)"],
-        ascending=[False, False]
-    ).reset_index(drop=True)
-    df_ladder.index += 1
-    df_ladder.index.name = "Rank"
-
-    st.dataframe(df_ladder, use_container_width=True)
-
-    # Highlight top performers
-    if not df_ladder.empty and df_ladder["Matches Played"].sum() > 0:
-        st.markdown("### 🌟 Top Performers")
-        top_3 = df_ladder.head(3)
-        cols = st.columns(3)
-        medals = ["🥇", "🥈", "🥉"]
-        for i, (_, row) in enumerate(top_3.iterrows()):
-            if i < 3 and row["Matches Played"] > 0:
-                with cols[i]:
-                    st.metric(
-                        label=f"{medals[i]} {row['Player']}",
-                        value=f"{row['Percentage (%)']}%",
-                        delta=f"{row['Matches Won']}W - {row['Matches Lost']}L"
-                    )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE 4: RULES
-# ═══════════════════════════════════════════════════════════════════════════════
-elif page == "📋 Rules of the Tournament":
-    st.header("📋 Rules of the Tournament")
-
-    st.markdown("""
-    ## 🏓 Abernethy Road Table Tennis Tournament Rules
-
-    ### Format
-    - **Single Elimination Knockout** tournament
-    - All matches are **Best of 3 Sets**
-    - Each set is played to **11 points**
-    - If the score reaches **10-10**, a player must win by **2 clear points** (deuce rule)
-    - The first player to win **2 sets** wins the match and advances to the next round
-
-    ---
-
-    ### Match Rules
-    1. At the **start of each set**, a **"play for serve"** point is played — whoever wins it earns the first serve. This point does **not** count towards the set score
-    2. After each point, the **winner of that point earns the serve** for the next point
-    3. Players do **not** have to serve cross court
-    4. A serve must **bounce once on each side** of the table
-    5. **Let serves** (net on serve, lands correctly) are replayed
-    6. A point is won when the opponent **fails to make a legal return**
-    7. At **10-10 (deuce)**, the same serving rule applies — winner of each point gets the next serve
-    8. Players switch ends after each set
-    9. If there is a **disputed call**, the tournament organiser's decision is final
-
-    ---
-
-    ### Tournament Structure
-    - **56 players** entered in a knockout bracket
-    - Players receiving a **BYE** automatically advance to the next round
-    - All rounds must be completed before the next round begins
-    - The draw is fixed at the start of the tournament
-
-    ---
-
-    ### Code of Conduct
-    1. **Respect** — Excessive celebration will be tolerated and is encouraged
-    2. **Sportsmanship** — Shake hands after each match
-
-    ---
-
-    ### Scoring & Ladder
-    - The **Ladder** page tracks each player's overall performance
-    - **Percentage** is calculated as: `Points Won ÷ Total Points × 100`
-    - This gives a measure of overall dominance across all matches played
-
-    ---
-
-    ### Contact
-    For any queries regarding the tournament, please contact Austin.
-
-    ---
-
-    *Good luck and may the superior Abernethy road human win!* 🏆
-    """)
-
-# ─── Footer ──────────────────────────────────────────────────────────────────
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Abernethy Road Chess Tournament**")
+st.sidebar.markdown(f"**{TOURNAMENT_NAME}**")
 st.sidebar.markdown(f"👥 {len(players)} Players Registered")
-st.sidebar.markdown(f"🗓️ Season 2026")
+st.sidebar.markdown(f"🗓️ Season {SEASON}")
