@@ -419,7 +419,6 @@ if page == "📋 Rules of the Tournament":
         - [FIDE Laws of Chess](https://handbook.fide.com/chapter/e012023) for formal chess and clock rules.
         - [US Chess quick/speed chess overview](https://new.uschess.org/speed-and-quick-chess-everybody) for time-control context.
 
-        This app keeps the tournament lightweight: one game, one winner, and no ladder.
         """
     )
 
