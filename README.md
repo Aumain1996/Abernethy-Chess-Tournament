@@ -1,18 +1,18 @@
 # Abernethy Road Chess Tournament
 
-A Streamlit app scaffold for running the Abernethy Road Chess Tournament. It is based on the existing table tennis tournament architecture and will be adapted once the chess tournament format, rules, and player list are finalised.
+A Streamlit app for running the Abernethy Road Chess Tournament. It uses the same lightweight architecture as the table tennis tournament app, adapted for a self-managed 10-minute-per-player knockout chess competition.
 
 ## What the app does
 
+- Opens on the tournament rules and app instructions page
 - Displays the full knockout bracket, including first-round byes
 - Uses a fixed random seed so the draw remains consistent between sessions
-- Lets organisers enter a match date and result details
-- Provides a starting point for chess-specific result validation
-- Supports recording forfeits
+- Pairs similar signup responses together where possible in the first round
+- Lets organisers enter a match date, winner, and result method
+- Supports checkmate, time forfeit, resignation, opponent forfeit, and other result types
 - Automatically advances winners into later rounds
 - Shows a round-by-round summary and highlights the tournament champion
-- Builds a live ladder with tournament statistics
-- Includes the tournament format, match rules, and code of conduct
+- Includes 10-minute clock rules and app usage instructions
 
 Match results are stored in Supabase when it is configured. If Supabase is unavailable, the app falls back to a local `matches_data.json` file.
 
@@ -58,9 +58,9 @@ Do not commit real credentials to the repository. Without these settings, result
 
 ## Project files
 
-- `streamlit_app.py` — application UI, bracket logic, scoring, and persistence
+- `streamlit_app.py` — application UI, bracket logic, result entry, and persistence
 - `requirements.txt` — Python dependencies
-- `Abernethy Rd Table Tennis Comp Registrations.csv` — retained source data from the original app until chess registrations are supplied
-- `Table Tennis Trophy.jpg` — retained placeholder image until chess artwork is supplied
+- `chess_players.csv` — chess signup list with player names and responses
+- `matches_data.json` — local fallback store when Supabase is not connected
 
-The current player list and detailed match-entry logic are placeholders inherited from the table tennis app. Replace them with the chess tournament details before launch.
+The app expects `chess_players.csv` to contain `Name` and `Response` columns.
