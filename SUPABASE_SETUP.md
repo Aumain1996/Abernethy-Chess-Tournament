@@ -14,6 +14,12 @@ shared across all users visiting the Streamlit app.
 2. Click **New Project**, give it a name (e.g. `chess-tournament`), set a database password, pick a region close to Perth
 3. Wait ~1 minute for the project to provision
 
+The current chess project is:
+
+```text
+https://lcbeklcwpbgbgcqnmdjb.supabase.co
+```
+
 ---
 
 ## Step 2 — Create the `matches` Table
