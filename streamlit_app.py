@@ -449,6 +449,7 @@ elif page == "🎯 Draw":
 elif page == "📝 Results Entry":
     st.header("📝 Results Entry")
     st.markdown("Record one winner per completed chess match. Winners automatically advance.")
+    st.info("After selecting the winner, click **Save Match** so the result flows through to the Draw page.")
 
     selected_round = st.selectbox(
         "Select Round",
