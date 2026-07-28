@@ -1,12 +1,6 @@
 # Secrets — never commit these
 .streamlit/secrets.toml
 
-# Setup guide (may contain credentials if edited locally — keep off GitHub)
-SUPABASE_SETUP.md
-
-# Local match data fallback (Supabase is the primary store)
-matches_data.json
-
 # Python
 __pycache__/
 *.py[cod]
